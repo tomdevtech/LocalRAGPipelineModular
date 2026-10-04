@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-rag-pipeline"
+version = "0.1.0"
+description = "A modular Retrieval-Augmented Generation (RAG) pipeline with configurable chunking, retrieval, and reranking."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Tom Helling", email = "tom.helling@example.com"}
+]
+keywords = ["rag", "retrieval-augmented-generation", "llm", "langchain", "chunking", "reranking"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "langchain>=1.4.0",
+    "langchain-ollama>=1.0.0",
+    "langchain-chroma>=1.0.0",
+    "langchain-text-splitters>=1.1.0",
+    "pandas>=2.0.0",
+    "PyYAML>=6.0",
+    "numpy>=1.24.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/tomdevtech/LocalRAGPipelineModular"
+Documentation = "https://github.com/tomdevtech/LocalRAGPipelineModular#readme"
+
+[project.scripts]
+local-rag = "rag_pipeline.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
