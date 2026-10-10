@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
-    {name = "Tom Helling", email = "tom.helling@example.com"}
+    {name = "Tom DevTech"}
 ]
 keywords = ["rag", "retrieval-augmented-generation", "llm", "langchain", "chunking", "reranking"]
 classifiers = [

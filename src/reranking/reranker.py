@@ -9,7 +9,7 @@ from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 import numpy as np
 
-from rag_pipeline.config.settings import Settings
+from config.settings import Settings
 
 
 class BaseReranker:

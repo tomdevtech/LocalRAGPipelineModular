@@ -1,201 +1,117 @@
-# Local RAG Pipeline with Modular Design
+# ⚙️ RAG Pipeline: Engineering Handbook
+**Version 1.2.0**
 
-This project implements a modular Retrieval-Augmented Generation (RAG) pipeline that allows for configurable chunking strategies, retrieval, and reranking. The pipeline is designed to be easily extensible and production-ready.
+## 🎯 System Purpose
+This repository implements a modular, high-performance Retrieval-Augmented Generation (RAG) pipeline. Its function is to transform raw, unstructured data into contextualized knowledge suitable for LLM consumption. The architecture is built around the **Service Orchestration Pattern**, ensuring maximum modularity, high testability, and clear separation of concerns.
 
-## Table of Contents
-- [Features](#features)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-  - [As a Command-Line Tool](#as-a-command-line-tool)
-  - [As a Python Module](#as-a-python-module)
-- [Chunking Strategies](#chunking-strategies)
-- [Reranking](#reranking)
-- [Example](#example)
-- [License](#license)
+## 🗺️ Architecture & Data Flow
+The system operates across four functional tiers: **Configuration $\rightarrow$ Services $\rightarrow$ Orchestrator $\rightarrow$ Data Layer.**
 
-## Features
-- **Modular Design**: Separation of concerns into services (chunking, retrieval, reranking) and configuration.
-- **Configurable Chunking**: Supports multiple chunking strategies:
-  - Fixed Size
-  - Recursive
-  - Document-based (by paragraphs)
-  - Semantic (placeholder)
-  - Propositional (placeholder)
-  - Agentic (placeholder)
-- **Configurable Retrieval**: Uses a vector store (Chroma) for efficient similarity search.
-- **Reranking**: Optionally reranks retrieved documents using embedding similarity to improve relevance.
-- **YAML Configuration**: All settings can be configured via a YAML file.
-- **Command-Line Interface**: Easy to use from the terminal for ingestion and querying.
-- **Python Package**: Can be installed and used as a module in other Python projects.
+### System Mechanism Diagram
+```mermaid
+graph LR
+    subgraph User Interface / CLI
+        CLI[User Query] --> OP(RAGPipeline Orchestrator);
+    end
 
-## Project Structure
+    subgraph Service Layer
+        OP -->|1. Chunking Request| CH[BaseChunker Factory];
+        CH -->|Chunk List| VDBM(VectorDBManager);
+        OP --> |2. Retrieval Request| VDBM;
+        OP --> |3. Rerank Request| RR[BaseReranker];
+    end
+
+    subgraph Data Layer
+        VDBM -->|Index/Retrieve| DB((Chroma Vector Store));
+        DB -- Reads/Writes --> Data(Source Data/CSV);
+    end
+
+    OP -.->|Accesses Config| CF[Settings];
+
+    style OP fill:#e0f7fa,stroke:#00bcd4,stroke-width:2px
+    style VDBM fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    style CH fill:#e8eaf6,stroke:#7986cb,stroke-width:2px
+    style RR fill:#f3e5f5,stroke:#ce93d8,stroke-width:2px
+    style DB fill:#f1f8e9,stroke:#a5d6a7,stroke-width:2px
+```
+
+## 📦 Project Structure (File Hierarchy)
+The module design enforces a flat, feature-level organization under `src/`, removing unnecessary nesting.
+
 ```
 local-rag-pipeline/
-├── data/                         # Data directory (CSV files, vector store)
-├── rag_pipeline/                 # Main package
-│   ├── __init__.py
-│   ├── config/                   # Configuration settings
+├── data/                         # Directory for persistent state (DB, source CSVs)
+├── src/                          # Core Application Modules (The Feature Set)
+│   ├── config/                   # Global configuration handlers
+│   │   └── settings.py           # Contains the Settings dataclass for pipeline configuration.
+│   ├── pipeline.py               # Main Orchestrator Class: RAGPipeline.
+│   ├── vector.py                 # VectorDBManager: Manages Chroma I/O via Lazy Loading.
+│   ├── chunking/                 # Modular Chunking Service Suite
 │   │   ├── __init__.py
-│   │   └── settings.py
-│   ├── pipeline.py               # Main RAG pipeline class
-│   ├── cli.py                    # Command-line interface
-│   └── services/                 # Services for different functionalities
-│       ├── chunking/             # Chunking strategies
-│       │   ├── __init__.py
-│       │   └── strategies.py
-│       ├── retrieval/            # Retrieval from vector store
-│       │   ├── __init__.py
-│       │   └── retriever.py
-│       └── reranking/            # Reranking of retrieved documents
-│           ├── __init__.py
-│           └── reranker.py
-├── pyproject.toml                # Project metadata and dependencies
+│   │   ├── strategies.py         # Factory: Centralized routing logic (get_chunker).
+│   │   ├── fixed_size.py         # Implementation: CharacterTextSplitter utility.
+│   │   ├── recursive.py          # Implementation: RecursiveCharacterTextSplitter utility.
+│   │   ├── document.py           # Implementation: Paragraph-based splitting.
+│   │   ├── semantic.py           # Blueprint: Semantic Clustering Logic (Requires ML Service Integration).
+│   │   ├── propositional.py      # Blueprint: Proposition Extraction Logic (Requires NLP Parser Integration).
+│   │   └── agentic.py            # Blueprint: Orchestrates splitting via Agent Tool.
+│   └── retrieval/
+│       └── retriever.py          # The Retriever Service Class.
+├── tests/                        # Automated Test Suite
+│   ├── config/
+│   │   └── test_settings.py     # Tests Settings validation and YAML loading.
+│   ├── pipeline/
+│   │   └── test_pipeline.py     # Integration tests for full RAGPipeline flow (uses mocks).
+│   ├── chunking/
+│   │   └── test_strategies.py   # Unit tests for all chunker implementations.
+│   └── reranking/
+│       └── test_reranker.py     # Unit tests for similarity calculation logic.
+├── pyproject.toml                # Project metadata & dependencies definition.
 ├── README.md
-├── requirements.txt              # Legacy requirements (for backward compatibility)
 └── LICENSE
 ```
 
-## Installation
-You can install the package in development mode using:
-
+## 🧪 Operational Guide: Execution
+### 1. Environment Setup
 ```bash
-pip install -e .
+pip install -r requirements.txt
 ```
 
-Or install from the built distribution:
-
+### 2. Data Ingestion (Indexing)
+Use the command-line interface (`local-rag`) to load external data into the vector store.
 ```bash
-pip install local-rag-pipeline
+local-rag --data path/to/data.csv
 ```
+**⚠️ Data Validation:** The system performs row-level validation on the source CSV to prevent crashes from column name mismatch.
 
-## Configuration
-The pipeline can be configured via a YAML file or by using the default settings. The configuration options are:
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `data_path` | Path to the data directory | `./data` |
-| `vector_db_path` | Path to the vector store directory | `./data/chrome_langchain_db` |
-| `collection_name` | Name of the collection in the vector store | `restaurant_reviews` |
-| `embedding_model` | Name of the embedding model (Ollama) | `mxbai-embed-large` |
-| `llm_model` | Name of the language model (Ollama) | `llama3.2` |
-| `chunking_strategy` | Strategy for chunking documents | `recursive` |
-| `chunk_size` | Size of each chunk (in characters) | `1000` |
-| `chunk_overlap` | Overlap between chunks (in characters) | `200` |
-| `k` | Number of documents to retrieve initially | `5` |
-| `use_reranking` | Whether to enable reranking | `True` |
-| `reranker_type` | Type of reranker to use | `embedding` |
-| `rerank_top_k` | Number of documents to keep after reranking | `3` |
-
-To create a configuration file, you can run:
-
+### 3. Querying (Retrieval)
+Use the CLI for immediate results:
 ```bash
-local-rag --config config.yaml
+local-rag --question "What is the core function of the RAG system?"
 ```
 
-This will create a default configuration file at `config.yaml` (if you specify a path) or you can manually create one. An example configuration file:
-
-```yaml
-data_path: "./data"
-vector_db_path: "./data/chrome_langchain_db"
-collection_name: "restaurant_reviews"
-embedding_model: "mxbai-embed-large"
-llm_model: "llama3.2"
-chunking_strategy: "recursive"
-chunk_size: 1000
-chunk_overlap: 200
-k: 5
-use_reranking: true
-reranker_type: "embedding"
-rerank_top_k: 3
-```
-
-## Usage
-
-### As a Command-Line Tool
-After installation, you can use the `local-rag` command.
-
-#### Ingesting Data
-To ingest data from a CSV file (expecting columns: `Title`, `Review`, etc.):
-
-```bash
-local-rag --data path/to/your/data.csv
-```
-
-#### Asking a Question
-To ask a question and get the relevant context:
-
-```bash
-local-rag --question "What is the best pizza in town?"
-```
-
-#### Interactive Mode
-To run in interactive mode (ask multiple questions):
-
-```bash
-local-rag
-```
-
-#### Overriding Settings
-You can override settings from the command line:
-
-```bash
-local-rag --data data.csv --k 10 --chunking-strategy fixed_size --no-reranking
-```
-
-### As a Python Module
-You can also use the pipeline in your own Python code:
-
+### 4. Developer Integration (Python)
+For deep integration, instantiate services directly:
 ```python
-from rag_pipeline.pipeline import RAGPipeline
-from rag_pipeline.config.settings import Settings
+from src.config.settings import Settings
+from src.pipeline import RAGPipeline
+from src.vector import VectorDBManager
 
-# Use default settings
-pipeline = RAGPipeline()
+# 1. Configuration
+settings = Settings()
+# 2. Data Layer Initialization
+db_manager = VectorDBManager(settings=settings)
 
-# Or use custom settings
-settings = Settings(
-    chunking_strategy="fixed_size",
-    k=10,
-    use_reranking=False
-)
+# 3. Pipeline Orchestration
 pipeline = RAGPipeline(settings=settings)
 
-# Add documents (from a list of langchain_core.documents.Document)
-documents = [...]  # Your documents
-pipeline.add_documents(documents)
-
-# Retrieve context for a query
-context = pipeline.get_context("What is the best pizza in town?")
-print(context)
+# 4. Run pipeline
+pipeline.add_documents(documents_list)
+context = pipeline.get_context("query")
 ```
 
-## Chunking Strategies
-The following chunking strategies are available:
-
-1. **fixed_size**: Splits text into chunks of a fixed size with optional overlap.
-2. **recursive**: Splits text by recursively trying different separators (default: `["\n\n", "\n", " ", ""]`).
-3. **document**: Splits text by double newline (paragraphs) and then further splits if needed.
-4. **semantic**: Placeholder for semantic chunking (currently splits by sentence and groups).
-5. **propositional**: Placeholder for propositional chunking (currently similar to semantic).
-6. **agentic**: Placeholder for agentic chunking (returns the whole text as one chunk).
-
-## Reranking
-The pipeline supports reranking of retrieved documents using embedding similarity. The reranker computes the cosine similarity between the query embedding and each document embedding, then returns the top `k` documents after reranking.
-
-To disable reranking, set `use_reranking: false` in the configuration or use the `--no-reranking` flag.
-
-## Example
-See the `realistic_restaurent_reviews.csv` file in the `data` directory for an example dataset. The pipeline can be run on this data as follows:
-
-```bash
-# Ingest the example data
-local-rag --data data/realistic_restaurent_reviews.csv
-
-# Ask a question
-local-rag --question "What is the best pizza in town?"
-```
-
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## 🧠 Next Development Milestones (Current Task Focus)
+The code is structurally sound. The next development phase is integrating external ML/NLP libraries into the blueprints:
+1.  **`SemanticChunker`**: Integrate actual embedding and clustering logic here.
+2.  **`PropositionalChunker`**: Integrate a Dependency Parsing service call here.
+3.  **`AgenticChunker`**: Finalize the Agent orchestration hook to execute the splitting logic via the Claude Agent.

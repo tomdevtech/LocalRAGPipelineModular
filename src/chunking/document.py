@@ -1,0 +1,20 @@
+from .strategies import BaseChunker
+from langchain_text_splitters import CharacterTextSplitter
+from typing import List
+
+class DocumentChunker(BaseChunker):
+    """Document-based chunking (e.g., by paragraphs)."""
+
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        # Split by double newline (paragraphs) then further split if needed
+        self._splitter = CharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+            separator="\n\n",
+        )
+
+    def split_text(self, text: str) -> List[str]:
+        """Split text based on paragraph separators."""
+        return self._splitter.split_text(text)
