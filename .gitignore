@@ -10,3 +10,9 @@ env/
 venv/
 env.bak/
 venv.bak/
+*.egg-info/
+build/
+dist/
+
+# Local vector database (re-created automatically on first run)
+data/chrome_langchain_db/

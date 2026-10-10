@@ -1,4 +1,6 @@
-from .strategies import BaseChunker
+from __future__ import annotations
+
+from .base import BaseChunker
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from typing import List
 

@@ -1,61 +1,97 @@
-from .strategies import BaseChunker
-from typing import List
+from __future__ import annotations
+
+from typing import Any, List, Optional
+
+import numpy as np
+from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from config.settings import Settings
+
+from .base import BaseChunker
+from .utils import split_sentences
+
 
 class SemanticChunker(BaseChunker):
     """
-    Semantic chunking: Groups text blocks based on conceptual relatedness.
+    Semantic chunking: starts a new chunk where the topic changes.
 
-    FUNCTIONAL IMPLEMENTATION BLUEPRINT:
-    This class provides the complete *control flow* (Steps 1-5) for semantic chunking.
-    It is currently operational but uses MOCKED/HEURISTIC logic for embedding and clustering.
+    Algorithm:
+    1. Split the text into sentences.
+    2. Embed every sentence.
+    3. Walk through the sentences in order. A new chunk is started when the
+       cosine similarity to the previous sentence drops below
+       ``similarity_threshold`` or when the chunk would exceed ``chunk_size``.
 
-    TO ACHIEVE TRUE SEMANTIC CHUNKING:
-    The `_embed_and_cluster` method MUST be implemented by:
-    1. Calling an external Embedding Service (e.g., OllamaEmbeddings) for all segments.
-    2. Using a clustering library (e.g., Scikit-learn's KMeans or DBSCAN) on the resulting vectors.
-    3. Grouping the original segments by cluster ID.
+    Sentences longer than ``chunk_size`` are hard-split with a recursive
+    splitter. ``chunk_overlap`` is accepted for API compatibility with the other
+    chunkers but is not used, because semantic boundaries are the whole point.
+
+    Args:
+        chunk_size: Maximum chunk length in characters.
+        chunk_overlap: Unused (see above).
+        embeddings: Any object with ``embed_documents(list[str])``. If omitted,
+            ``OllamaEmbeddings`` is created lazily on first use.
+        embedding_model: Ollama model name used when ``embeddings`` is omitted.
+        similarity_threshold: Cosine similarity below which a new chunk starts.
     """
 
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+    def __init__(
+        self,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+        embeddings: Optional[Any] = None,
+        embedding_model: Optional[str] = None,
+        similarity_threshold: float = 0.6,
+    ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        # Step 1: Initial split into sentences/paragraphs using a practical baseline.
-        self._initial_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap,
-            separators=["\n\n", "\n", " ", ""],
+        self.similarity_threshold = similarity_threshold
+        self._embedding_model = embedding_model or Settings.embedding_model
+        self._embeddings = embeddings
+        self._hard_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=min(chunk_overlap, max(chunk_size - 1, 0)),
         )
 
-    def _embed_and_cluster(self, segments: List[str]) -> List[List[str]]:
-        """
-        [MOCK IMPLEMENTATION] Simulates the steps of embedding and clustering.
+    @property
+    def embeddings(self) -> Any:
+        if self._embeddings is None:
+            self._embeddings = OllamaEmbeddings(model=self._embedding_model)
+        return self._embeddings
 
-        REPLACE THIS entire method with calls to your actual Vector/Clustering Services.
-        """
-        print("WARNING: SemanticChunker is using MOCK embedding and clustering. Use an external service to make this functional.")
-
-        # Mocking the result: Grouping the first three segments into separate 'propositions'
-        # The real implementation would generate meaningful, non-sequential groups.
-        if len(segments) > 0:
-            return [[segments[0]]], [[segments[1]]], [[segments[2]] if len(segments) > 2 else ""]
-        return []
+    def _similarities(self, sentences: List[str]) -> np.ndarray:
+        """Cosine similarity between each sentence and the one before it."""
+        vectors = np.asarray(self.embeddings.embed_documents(sentences), dtype=float)
+        norms = np.linalg.norm(vectors, axis=1)
+        norms[norms == 0] = 1e-12
+        unit = vectors / norms[:, None]
+        return np.sum(unit[1:] * unit[:-1], axis=1)
 
     def split_text(self, text: str) -> List[str]:
-        """
-        Splits text into semantically coherent chunks.
-        """
-        # Step 1: Split into sentences/paragraphs
-        initial_segments = self._initial_splitter.split_text(text)
-        if not initial_segments:
+        """Split text into semantically coherent chunks."""
+        sentences: List[str] = []
+        for sentence in split_sentences(text):
+            if len(sentence) > self.chunk_size:
+                sentences.extend(self._hard_splitter.split_text(sentence))
+            else:
+                sentences.append(sentence)
+
+        if not sentences:
             return []
+        if len(sentences) == 1:
+            return sentences
 
-        # Steps 2, 3, 4: Embed, Cluster, and Group using the functional blueprint
-        grouped_chunks = self._embed_and_cluster(initial_segments)
+        similarities = self._similarities(sentences)
 
-        # Step 5: Return all the individual chunks found in the groups
-        final_chunks: List[str] = []
-        for group in grouped_chunks:
-            for chunk in group:
-                final_chunks.append(chunk)
-        return final_chunks
+        chunks: List[str] = []
+        current = sentences[0]
+        for sentence, similarity in zip(sentences[1:], similarities):
+            too_long = len(current) + 1 + len(sentence) > self.chunk_size
+            if similarity < self.similarity_threshold or too_long:
+                chunks.append(current)
+                current = sentence
+            else:
+                current = f"{current} {sentence}"
+        chunks.append(current)
+        return chunks

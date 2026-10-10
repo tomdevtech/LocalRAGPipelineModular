@@ -4,8 +4,8 @@ Configuration settings for the RAG pipeline.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict
 
 try:
     import yaml
@@ -32,17 +32,26 @@ class Settings:
     chunk_overlap: int = 200
 
     # Retrieval
-    k: int = 5  # Number of documents to retrieve initially
+    k: int = 5  # Number of documents returned when reranking is disabled
 
     # Reranking
     use_reranking: bool = True
     reranker_type: str = "embedding"
-    rerank_top_k: int = 3  # Number of documents to keep after reranking
+    rerank_top_k: int = 3  # Number of documents returned when reranking is enabled
 
     # Additional settings can be added here
 
     def __post_init__(self) -> None:
-        """Ensure paths are absolute and exist if necessary."""
+        """Validate values, make paths absolute and create directories."""
+        if self.chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than 0")
+        if not 0 <= self.chunk_overlap < self.chunk_size:
+            raise ValueError("chunk_overlap must be >= 0 and smaller than chunk_size")
+        if self.k <= 0:
+            raise ValueError("k must be greater than 0")
+        if self.rerank_top_k <= 0:
+            raise ValueError("rerank_top_k must be greater than 0")
+
         self.data_path = os.path.abspath(self.data_path)
         self.vector_db_path = os.path.abspath(self.vector_db_path)
 
@@ -71,8 +80,11 @@ class Settings:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Configuration file not found: {file_path}")
 
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             config: Dict[str, Any] = yaml.safe_load(f) or {}
+
+        if not isinstance(config, dict):
+            raise ValueError(f"Configuration file must contain a mapping: {file_path}")
 
         return cls(**config)
 
@@ -86,21 +98,7 @@ class Settings:
         if yaml is None:  # pragma: no cover
             raise ImportError("PyYAML is not installed. Install it with 'pip install pyyaml'.")
 
-        # Convert dataclass to dict
-        config: Dict[str, Any] = {
-            "data_path": self.data_path,
-            "vector_db_path": self.vector_db_path,
-            "collection_name": self.collection_name,
-            "embedding_model": self.embedding_model,
-            "llm_model": self.llm_model,
-            "chunking_strategy": self.chunking_strategy,
-            "chunk_size": self.chunk_size,
-            "chunk_overlap": self.chunk_overlap,
-            "k": self.k,
-            "use_reranking": self.use_reranking,
-            "reranker_type": self.reranker_type,
-            "rerank_top_k": self.rerank_top_k,
-        }
+        config: Dict[str, Any] = asdict(self)
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False)

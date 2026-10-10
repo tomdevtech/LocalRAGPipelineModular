@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from typing import List
 
+import numpy as np
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
-import numpy as np
 
 from config.settings import Settings
 
@@ -37,13 +37,11 @@ class EmbeddingReranker(BaseReranker):
 
     def __init__(self, embedding_model: str | None = None):
         """
-        Initialize the reranker.
-
         Args:
             embedding_model: The name of the embedding model to use for similarity.
+                Defaults to the embedding model from ``Settings``.
         """
-        settings = Settings()
-        self.embedding_model = embedding_model or settings.embedding_model
+        self.embedding_model = embedding_model or Settings.embedding_model
         self.embeddings = OllamaEmbeddings(model=self.embedding_model)
 
     def rerank(
@@ -63,23 +61,18 @@ class EmbeddingReranker(BaseReranker):
         if not documents:
             return []
 
-        # Embed the query
-        query_embedding = self.embeddings.embed_query(query)
-
-        # Embed each document
-        doc_embeddings = self.embeddings.embed_documents(
-            [doc.page_content for doc in documents]
+        query_embedding = np.asarray(self.embeddings.embed_query(query), dtype=float)
+        doc_embeddings = np.asarray(
+            self.embeddings.embed_documents([doc.page_content for doc in documents]),
+            dtype=float,
         )
 
-        # Compute cosine similarity
-        similarities = np.dot(doc_embeddings, query_embedding) / (
-            np.linalg.norm(doc_embeddings, axis=1) * np.linalg.norm(query_embedding)
-        )
+        # Cosine similarity; the epsilon guards against zero vectors.
+        denominator = np.linalg.norm(doc_embeddings, axis=1) * np.linalg.norm(query_embedding)
+        similarities = np.dot(doc_embeddings, query_embedding) / np.maximum(denominator, 1e-12)
 
-        # Get indices of top_k highest similarities
-        top_indices = np.argsort(similarities)[::-1][:top_k]
-
-        # Return the top_k documents
+        # stable sort -> documents with equal scores keep their retrieval order
+        top_indices = np.argsort(-similarities, kind="stable")[:top_k]
         return [documents[i] for i in top_indices]
 
 
@@ -99,8 +92,6 @@ def get_reranker(reranker_type: str = "embedding", **kwargs) -> BaseReranker:
     """
     if reranker_type == "embedding":
         return EmbeddingReranker(**kwargs)
-    else:
-        raise ValueError(
-            f"Unknown reranker type: {reranker_type}. "
-            f"Available types: ['embedding']"
-        )
+    raise ValueError(
+        f"Unknown reranker type: {reranker_type}. Available types: ['embedding']"
+    )

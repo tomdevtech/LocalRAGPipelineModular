@@ -1,4 +1,7 @@
-from .strategies import BaseChunker
+from __future__ import annotations
+
+from .base import BaseChunker
+from typing import List
 from langchain_text_splitters import CharacterTextSplitter
 
 class FixedSizeChunker(BaseChunker):

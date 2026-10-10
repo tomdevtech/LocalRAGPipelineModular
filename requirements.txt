@@ -1,4 +1,7 @@
-langchain
-langchain-ollama
-langchain-chroma
-pandas
+langchain-core>=1.0.0
+langchain-ollama>=1.0.0
+langchain-chroma>=1.0.0
+langchain-text-splitters>=1.1.0
+pandas>=2.0.0
+numpy>=1.24.0
+PyYAML>=6.0

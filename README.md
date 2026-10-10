@@ -15,7 +15,7 @@ graph LR
 
     subgraph Service Layer
         OP -->|1. Chunking Request| CH[BaseChunker Factory];
-        CH -->|Chunk List| VDBM(VectorDBManager);
+        CH -->|Chunk List| VDBM(Retriever);
         OP --> |2. Retrieval Request| VDBM;
         OP --> |3. Rerank Request| RR[BaseReranker];
     end
@@ -39,78 +39,78 @@ The module design enforces a flat, feature-level organization under `src/`, remo
 
 ```
 local-rag-pipeline/
-├── data/                         # Directory for persistent state (DB, source CSVs)
+├── data/                         # Source CSVs (the local Chroma DB is created here, git-ignored)
 ├── src/                          # Core Application Modules (The Feature Set)
-│   ├── config/                   # Global configuration handlers
-│   │   └── settings.py           # Contains the Settings dataclass for pipeline configuration.
+│   ├── main.py                   # CLI entry point (`local-rag`).
 │   ├── pipeline.py               # Main Orchestrator Class: RAGPipeline.
-│   ├── vector.py                 # VectorDBManager: Manages Chroma I/O via Lazy Loading.
-│   ├── chunking/                 # Modular Chunking Service Suite
-│   │   ├── __init__.py
-│   │   ├── strategies.py         # Factory: Centralized routing logic (get_chunker).
-│   │   ├── fixed_size.py         # Implementation: CharacterTextSplitter utility.
-│   │   ├── recursive.py          # Implementation: RecursiveCharacterTextSplitter utility.
-│   │   ├── document.py           # Implementation: Paragraph-based splitting.
-│   │   ├── semantic.py           # Blueprint: Semantic Clustering Logic (Requires ML Service Integration).
-│   │   ├── propositional.py      # Blueprint: Proposition Extraction Logic (Requires NLP Parser Integration).
-│   │   └── agentic.py            # Blueprint: Orchestrates splitting via Agent Tool.
-│   └── retrieval/
-│       └── retriever.py          # The Retriever Service Class.
-├── tests/                        # Automated Test Suite
+│   ├── loaders.py                # CSV -> Document loading with column validation.
 │   ├── config/
-│   │   └── test_settings.py     # Tests Settings validation and YAML loading.
-│   ├── pipeline/
-│   │   └── test_pipeline.py     # Integration tests for full RAGPipeline flow (uses mocks).
-│   ├── chunking/
-│   │   └── test_strategies.py   # Unit tests for all chunker implementations.
+│   │   └── settings.py           # Settings dataclass (validation, YAML load/save).
+│   ├── chunking/                 # Modular Chunking Service Suite
+│   │   ├── base.py               # BaseChunker (own module => no circular imports).
+│   │   ├── strategies.py         # Factory: get_chunker + re-exports of all chunkers.
+│   │   ├── fixed_size.py         # CharacterTextSplitter utility.
+│   │   ├── recursive.py          # RecursiveCharacterTextSplitter utility.
+│   │   ├── document.py           # Paragraph-based splitting.
+│   │   ├── semantic.py           # Embedding-based topic-change splitting.
+│   │   ├── propositional.py      # One chunk per sentence; plug in an `extractor` for LLM propositions.
+│   │   └── agentic.py            # Plug in an agent callable; falls back to recursive splitting.
+│   ├── retrieval/
+│   │   └── retriever.py          # Retriever: lazy Chroma access (index + query).
 │   └── reranking/
-│       └── test_reranker.py     # Unit tests for similarity calculation logic.
-├── pyproject.toml                # Project metadata & dependencies definition.
+│       └── reranker.py           # EmbeddingReranker (cosine similarity).
+├── tests/                        # pytest suite (no Ollama required)
+├── pyproject.toml                # Project metadata, dependencies, pytest config.
 ├── README.md
 └── LICENSE
 ```
+
+**Import rule:** modules inside a package never import from their own package's factory
+(`strategies.py`); they import from `base.py`. Dependencies only point one way:
+`base.py <- concrete chunkers <- strategies.py`.
 
 ## 🧪 Operational Guide: Execution
 ### 1. Environment Setup
 ```bash
 pip install -r requirements.txt
+ollama pull mxbai-embed-large   # embedding model (see settings)
+ollama pull llama3.2            # LLM (see settings)
 ```
+Run from the repository root, either `python src/main.py ...` or, after `pip install -e .`, `local-rag ...`.
 
 ### 2. Data Ingestion (Indexing)
-Use the command-line interface (`local-rag`) to load external data into the vector store.
 ```bash
-local-rag --data path/to/data.csv
+local-rag --data data/realistic_restaurent_reviews.csv
 ```
-**⚠️ Data Validation:** The system performs row-level validation on the source CSV to prevent crashes from column name mismatch.
+The CSV needs the columns `Title`, `Date`, `Rating`, `Review`; a missing column produces a clear error.
+If the vector store is empty on startup, the bundled data set is indexed automatically.
+Indexing is idempotent: running it twice does not create duplicates.
 
 ### 3. Querying (Retrieval)
-Use the CLI for immediate results:
 ```bash
-local-rag --question "What is the core function of the RAG system?"
+local-rag --question "What do people say about the pizza?"   # single question
+local-rag                                                    # interactive mode
+local-rag --config my_settings.yaml -k 5 -q "..."            # custom settings
 ```
 
 ### 4. Developer Integration (Python)
-For deep integration, instantiate services directly:
 ```python
-from src.config.settings import Settings
-from src.pipeline import RAGPipeline
-from src.vector import VectorDBManager
+from langchain_core.documents import Document
+from config.settings import Settings
+from pipeline import RAGPipeline
 
-# 1. Configuration
-settings = Settings()
-# 2. Data Layer Initialization
-db_manager = VectorDBManager(settings=settings)
-
-# 3. Pipeline Orchestration
-pipeline = RAGPipeline(settings=settings)
-
-# 4. Run pipeline
-pipeline.add_documents(documents_list)
+pipeline = RAGPipeline(settings=Settings())
+pipeline.add_documents([Document(page_content="...", metadata={"source": "demo"})])
 context = pipeline.get_context("query")
 ```
 
+### 5. Tests
+```bash
+pip install pytest
+python -m pytest
+```
+
 ## 🧠 Next Development Milestones (Current Task Focus)
-The code is structurally sound. The next development phase is integrating external ML/NLP libraries into the blueprints:
-1.  **`SemanticChunker`**: Integrate actual embedding and clustering logic here.
-2.  **`PropositionalChunker`**: Integrate a Dependency Parsing service call here.
-3.  **`AgenticChunker`**: Finalize the Agent orchestration hook to execute the splitting logic via the Claude Agent.
+1.  **`PropositionalChunker`**: Provide an `extractor` (LLM or dependency parser) that returns atomic propositions.
+2.  **`AgenticChunker`**: Provide an `agent(text, chunk_size) -> list[str]` callable backed by an LLM.
+3.  **`SemanticChunker`**: Tune `similarity_threshold` on real data, or switch to percentile-based breakpoints.

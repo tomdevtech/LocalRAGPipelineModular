@@ -1,125 +1,133 @@
-import unittest
-from src.pipeline import RAGPipeline
-from src.config.settings import Settings
-from src.chunking.strategies import BaseChunker
-from src.retrieval.retriever import Retriever
-from src.reranking.reranker import BaseReranker
+from unittest.mock import Mock
 
-class TestRAGPipeline(unittest.TestCase):
-    """Tests the core RAGPipeline orchestration logic."""
+import pytest
+from langchain_core.documents import Document
 
-    def setUp(self):
-        # Use mock settings for predictable testing
-        self.settings = Settings()
-        self.pipeline = RAGPipeline(settings=self.settings)
+from chunking.base import BaseChunker
+from config.settings import Settings
+from pipeline import RAGPipeline
+from reranking.reranker import BaseReranker
+from retrieval.retriever import Retriever
 
-        # Mock services for isolation testing
-        self.mock_chunker = unittest.mock.Mock(spec=BaseChunker)
-        self.pipeline.chunker = self.mock_chunker
 
-        self.mock_retriever = unittest.mock.Mock(spec=Retriever)
-        self.pipeline.retriever = self.mock_retriever
+def make_pipeline(tmp_path, **overrides):
+    settings = Settings(
+        data_path=str(tmp_path), vector_db_path=str(tmp_path / "db"), **overrides
+    )
+    return RAGPipeline(settings=settings)
 
-        self.mock_reranker = unittest.mock.Mock(spec=BaseReranker)
-        self.pipeline.reranker = self.mock_reranker
 
-    def test_pipeline_initialization_success(self):
-        """Test that the RAGPipeline initializes all components successfully."""
-        self.assertIsInstance(self.pipeline.chunker, BaseChunker)
-        self.assertIsInstance(self.pipeline.retriever, Retriever)
-        if self.settings.use_reranking:
-            self.assertIsNotNone(self.pipeline.reranker)
+@pytest.fixture
+def pipeline(tmp_path):
+    """Real pipeline whose services are replaced by mocks."""
+    p = make_pipeline(tmp_path)
+    p.chunker = Mock(spec=BaseChunker)
+    p.retriever = Mock(spec=Retriever)
+    p.reranker = Mock(spec=BaseReranker)
+    return p
 
-    def test_add_documents_flow(self):
-        """Test the document ingestion and chunking flow."""
-        doc1 = Document(page_content="long content one", metadata={"source": "doc1"})
-        documents = [doc1]
 
-        # Mock chunker output: returns two chunks for one document
-        mock_chunks = ["chunk A", "chunk B"]
-        self.mock_chunker.split_text.return_value = mock_chunks
+def test_initialization_creates_all_components(tmp_path):
+    p = make_pipeline(tmp_path)
+    assert isinstance(p.chunker, BaseChunker)
+    assert isinstance(p.retriever, Retriever)
+    assert isinstance(p.reranker, BaseReranker)
+    assert make_pipeline(tmp_path, use_reranking=False).reranker is None
 
-        self.pipeline.add_documents(documents)
 
-        # Verify chunker was called
-        self.mock_chunker.split_text.assert_called_once_with("long content one")
+def test_retriever_and_reranker_receive_configured_models(tmp_path):
+    p = make_pipeline(tmp_path, embedding_model="other-model", collection_name="coll")
+    assert p.reranker.embedding_model == "other-model"
+    assert p.retriever._embedding_model == "other-model"
+    assert p.retriever._collection_name == "coll"
 
-        # Verify retriever was called with correctly formatted chunks and IDs
-        expected_chunks = [
-            Document(page_content="chunk A", metadata={"source": "doc1", "chunk_id": 0, "parent_id": 0}),
-            Document(page_content="chunk B", metadata={"source": "doc1", "chunk_id": 1, "parent_id": 0}),
-        ]
-        self.mock_retriever.add_documents.assert_called_once_with(
-            expected_chunks,
-            ["0-0", "0-1"]
-        )
 
-    def test_retrieve_no_reranker(self):
-        """Test retrieval flow when reranking is disabled."""
-        self.pipeline.settings.use_reranking = False
+def test_add_documents_flow(pipeline):
+    pipeline.chunker.split_text.return_value = ["chunk A", "chunk B"]
+    doc = Document(page_content="long content one", metadata={"source": "doc1"})
 
-        mock_initial_docs = [Document(page_content="Raw doc 1"), Document(page_content="Raw doc 2")]
+    added = pipeline.add_documents([doc])
 
-        # Mock retriever to return more than K*2 (e.g., 4)
-        self.mock_retriever.retrieve.return_value = [
-            Document(page_content="R1"), Document(page_content="R2"),
-            Document(page_content="R3"), Document(page_content="R4")
-        ]
+    assert added == 2
+    pipeline.chunker.split_text.assert_called_once_with("long content one")
+    chunks, ids = pipeline.retriever.add_documents.call_args.args
+    assert chunks == [
+        Document(page_content="chunk A", metadata={"source": "doc1", "chunk_id": 0, "parent_id": 0}),
+        Document(page_content="chunk B", metadata={"source": "doc1", "chunk_id": 1, "parent_id": 0}),
+    ]
+    assert len(ids) == len(set(ids)) == 2
 
-        # We request k=2, so we expect the first 2 to be returned.
-        results = self.pipeline.retrieve("test query", k=2)
 
-        # Verify retriever was called with k*2 (4)
-        self.mock_retriever.retrieve.assert_called_once_with("test query", k=4)
+def test_chunk_ids_are_stable_and_content_based(pipeline):
+    pipeline.chunker.split_text.return_value = ["chunk A"]
+    doc = Document(page_content="x", metadata={"source": "s"})
 
-        # Verify the pipeline returned the top K (2) results
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results[0].page_content, "R1")
+    pipeline.add_documents([doc])
+    first = pipeline.retriever.add_documents.call_args.args[1]
+    pipeline.add_documents([doc])
+    second = pipeline.retriever.add_documents.call_args.args[1]
+    assert first == second  # re-indexing updates instead of duplicating
 
-    def test_retrieve_with_reranker(self):
-        """Test retrieval flow when reranking is enabled."""
-        self.pipeline.settings.use_reranking = True
+    pipeline.chunker.split_text.return_value = ["different chunk"]
+    pipeline.add_documents([doc])
+    assert pipeline.retriever.add_documents.call_args.args[1] != first  # no collisions
 
-        mock_initial_docs = [Document(page_content="R1"), Document(page_content="R2"), Document(page_content="R3"), Document(page_content="R4")]
-        mock_reranked_docs = [Document(page_content="Top Reranked 1"), Document(page_content="Top Reranked 2")]
 
-        # Mock retriever to return pool of 4
-        self.mock_retriever.retrieve.return_value = mock_initial_docs
+def test_add_documents_with_no_chunks_does_not_touch_store(pipeline):
+    pipeline.chunker.split_text.return_value = []
+    assert pipeline.add_documents([Document(page_content="")]) == 0
+    pipeline.retriever.add_documents.assert_not_called()
 
-        # Mock reranker to return final pool of 2
-        self.mock_reranker.rerank.return_value = mock_reranked_docs
 
-        results = self.pipeline.retrieve("test query", k=2)
+def test_retrieve_without_reranker(pipeline):
+    pipeline.reranker = None
+    pipeline.retriever.retrieve.return_value = [Document(page_content=f"R{i}") for i in range(1, 3)]
 
-        # Verify retriever was called with k*2 (4)
-        self.mock_retriever.retrieve.assert_called_once_with("test query", k=4)
+    results = pipeline.retrieve("test query", k=2)
 
-        # Verify reranker was called with the initial pool and target K
-        self.mock_reranker.rerank.assert_called_once_with(
-            "test query", mock_initial_docs, top_k=2
-        )
+    pipeline.retriever.retrieve.assert_called_once_with("test query", k=2)
+    assert [d.page_content for d in results] == ["R1", "R2"]
 
-        # Verify pipeline returned the final reranked list (2)
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results[0].page_content, "Top Reranked 1")
 
-    def test_get_context_flow(self):
-        """Test the end-to-end context generation."""
-        # Setup mock to return 2 documents during retrieval
-        mock_docs = [
-            Document(page_content="Context snippet 1"),
-            Document(page_content="Context snippet 2")
-        ]
-        self.mock_retriever.retrieve.return_value = mock_docs
+def test_retrieve_with_reranker_fetches_wider_pool(pipeline):
+    pool = [Document(page_content=f"R{i}") for i in range(1, 5)]
+    reranked = [Document(page_content="Top 1"), Document(page_content="Top 2")]
+    pipeline.retriever.retrieve.return_value = pool
+    pipeline.reranker.rerank.return_value = reranked
 
-        context = self.pipeline.get_context("test query")
+    results = pipeline.retrieve("test query", k=2)
 
-        # Verify retriever was called
-        self.mock_retriever.retrieve.assert_called_once_with("test query")
+    pipeline.retriever.retrieve.assert_called_once_with("test query", k=4)
+    pipeline.reranker.rerank.assert_called_once_with("test query", pool, top_k=2)
+    assert results == reranked
 
-        # Verify context formatting is correct
-        expected_context = "Context snippet 1\n\nContext snippet 2"
-        self.assertEqual(context, expected_context)
 
-if __name__ == '__main__':
-    unittest.main()
+def test_retrieve_default_k_comes_from_settings(pipeline):
+    pipeline.retriever.retrieve.return_value = []
+
+    pipeline.retrieve("q")  # reranker on -> rerank_top_k (3) -> pool 6
+    pipeline.retriever.retrieve.assert_called_with("q", k=2 * pipeline.settings.rerank_top_k)
+
+    pipeline.reranker = None
+    pipeline.retrieve("q")  # reranker off -> k (5)
+    pipeline.retriever.retrieve.assert_called_with("q", k=pipeline.settings.k)
+
+
+def test_retrieve_with_empty_pool_skips_reranker(pipeline):
+    pipeline.retriever.retrieve.return_value = []
+    assert pipeline.retrieve("q", k=2) == []
+    pipeline.reranker.rerank.assert_not_called()
+
+
+def test_retrieve_rejects_invalid_k(pipeline):
+    with pytest.raises(ValueError):
+        pipeline.retrieve("q", k=0)
+
+
+def test_get_context_joins_documents(pipeline):
+    pipeline.reranker = None
+    pipeline.retriever.retrieve.return_value = [
+        Document(page_content="Context snippet 1"),
+        Document(page_content="Context snippet 2"),
+    ]
+    assert pipeline.get_context("q", k=2) == "Context snippet 1\n\nContext snippet 2"

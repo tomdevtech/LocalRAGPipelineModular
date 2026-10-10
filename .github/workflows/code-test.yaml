@@ -8,20 +8,22 @@ on:
 
 jobs:
   test:
-    name: Run Unit and Integration Tests
+    name: Run tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Set up Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.14'
-    - name: Install Dependencies
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt # Ensures all dependencies, including langchain, are present
-    - name: Run Tests
-      run: |
-        # Setting PYTHONPATH ensures that the test runner can find the 'src' directory
-        export PYTHONPATH=$PWD:$PYTHONPATH
-        python -m unittest discover tests
+        pip install -r requirements.txt pytest
+    - name: Run tests
+      # pythonpath = ["src"] is configured in pyproject.toml; no Ollama needed (embeddings are faked).
+      run: python -m pytest

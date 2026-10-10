@@ -1,51 +1,69 @@
-from .strategies import BaseChunker
-from typing import List
-from src.pipeline import RAGPipeline # Assuming RAGPipeline or a dedicated Service can orchestrate the Agent call
+from __future__ import annotations
+
+import logging
+from typing import Callable, List, Optional
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from .base import BaseChunker
+
+logger = logging.getLogger(__name__)
+
+# An agent takes (text, chunk_size) and returns the list of chunks.
+Agent = Callable[[str, int], List[str]]
+
 
 class AgenticChunker(BaseChunker):
     """
-    Agentic chunking: delegates the splitting decision to a specialized LLM Agent.
+    Agentic chunking: delegates the splitting decision to an LLM agent.
 
-    Implementation Note: This class acts as a wrapper. A fully functional implementation
-    requires a mechanism (like a dependency injected `AgentOrchestrator` service)
-    to call the LangChain/Claude Agent tool with a strict JSON schema prompt.
-    The current implementation uses a direct fallback.
+    Plug in any callable ``agent(text, chunk_size) -> list[str]`` via the
+    constructor or ``set_agent_orchestrator``. If no agent is set, or the agent
+    returns something unusable, the chunker falls back to recursive character
+    splitting, so it always honours ``chunk_size``.
     """
 
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+    def __init__(
+        self,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+        agent: Optional[Agent] = None,
+    ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        # In a real pipeline, this would hold a reference to the AgentService
-        self.agent_orchestrator = None
+        self.agent_orchestrator: Optional[Agent] = agent
+        self._fallback = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap
+        )
+        self._warned = False
 
-    def set_agent_orchestrator(self, orchestrator):
-        """Sets the service responsible for interacting with the Agent."""
+    def set_agent_orchestrator(self, orchestrator: Agent) -> None:
+        """Set the callable responsible for interacting with the agent."""
         self.agent_orchestrator = orchestrator
 
-    def _run_agent_for_splitting(self, text: str) -> List[str]:
-        """
-        CORE FUNCTION: Executes the Agent and parses the resulting chunk list.
-
-        Args:
-            text: The text content to be chunked.
-
-        Returns:
-            A list of strings, where each string is a well-defined chunk.
-        """
-        if not self.agent_orchestrator:
-            print("WARNING: AgentOrchestrator not set. Falling back to whole text.")
-            return [text] # Fallback: return whole text as one chunk
-
-        # --- ACTUAL AGENT CALL WOULD HAPPEN HERE ---
-        # Example: response = self.agent_orchestrator.run_agent(
-        #    prompt=f"Split this text into chunks, max size {self.chunk_size}..."
-        # )
-        # return parse_json_to_list(response)
-        print("INFO: Successfully routed chunking request to the Agent Orchestrator.")
-        return [text] # Placeholder return
+    def _warn_once(self, message: str) -> None:
+        if not self._warned:
+            logger.warning(message)
+            self._warned = True
 
     def split_text(self, text: str) -> List[str]:
-        """
-        Uses an LLM Agent to split text into intelligently segmented chunks.
-        """
-        return self._run_agent_for_splitting(text)
+        """Split text with the agent, falling back to recursive splitting."""
+        if self.agent_orchestrator is None:
+            self._warn_once("AgenticChunker has no agent set; using recursive splitting.")
+            return self._fallback.split_text(text)
+
+        try:
+            chunks = self.agent_orchestrator(text, self.chunk_size)
+        except Exception as exc:  # the agent is external code, don't crash ingestion
+            self._warn_once(f"Agent failed ({exc}); using recursive splitting.")
+            return self._fallback.split_text(text)
+
+        valid = (
+            isinstance(chunks, list)
+            and bool(chunks)
+            and all(isinstance(c, str) and c.strip() for c in chunks)
+        )
+        if not valid:
+            self._warn_once("Agent returned an invalid chunk list; using recursive splitting.")
+            return self._fallback.split_text(text)
+        return chunks

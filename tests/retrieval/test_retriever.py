@@ -1,100 +1,73 @@
-import unittest
-from unittest.mock import Mock, patch
-from src.retrieval.retriever import Retriever
-from src.config.settings import Settings
+from unittest.mock import MagicMock, patch
+
+import pytest
 from langchain_core.documents import Document
-from langchain_chroma import Chroma
 
-class TestRetriever(unittest.TestCase):
-    """Tests the Retriever class, focusing on lazy initialization and retrieval."""
-
-    def setUp(self):
-        self.settings = Settings()
-        # Ensure we mock OllamaEmbeddings globally if we were to test it, but here we focus on Chroma interaction.
-
-    @patch('src.retrieval.retriever.OllamaEmbeddings')
-    def test_init_with_settings(self, MockEmbeddings):
-        """Test initialization when vector_store is None, verifying reliance on Settings."""
-        # This test mainly checks if the structure correctly points to using settings when no store is provided.
-        retriever = Retriever()
-        # We expect the private initialization to have occurred when the first method is called,
-        # but we can check the constructor's behavior.
-        self.assertIsNone(retriever.vector_store)
-
-    @patch('src.retrieval.retriever.OllamaEmbeddings')
-    def test_lazy_initialization_on_first_call(self, MockEmbeddings):
-        """Test that the vector store is initialized only upon the first call to retrieve/add_documents."""
-        retriever = Retriever()
-
-        # Check that the store is None before the call
-        self.assertIsNone(retriever.vector_store)
-
-        # Simulate a call that triggers initialization
-        # We mock Chroma to track calls
-        mock_chroma = Mock()
-        MockEmbeddings.return_value = mock_chroma
-
-        # Call a method that triggers initialization (e.g., retrieve)
-        # Note: This is challenging to test perfectly without modifying the service to expose the store for inspection,
-        # but we check if the internal state reflects a non-None store after use.
-        with patch('src.retrieval.retriever.Chroma', return_value=mock_chroma) as MockChroma:
-            retriever.retrieve("test query", k=5)
-            self.assertIsNotNone(retriever.vector_store)
-            MockChroma.assert_called_once()
+from retrieval.retriever import Retriever
 
 
-    @patch('src.retrieval.retriever.Chroma')
-    def test_add_documents(self, MockChroma):
-        """Test adding documents to the mocked vector store."""
-        mock_chroma_instance = MockChroma.return_value
-        retriever = Retriever()
+def test_constructor_is_lazy():
+    assert Retriever().vector_store is None
 
-        docs = [Document(page_content="chunk 1", metadata={})]
-        ids = ["id_1"]
 
-        retriever.add_documents(docs, ids)
+def test_lazy_initialization_uses_constructor_arguments():
+    """The values given to the constructor must reach Chroma/Ollama (they were ignored before)."""
+    with patch("retrieval.retriever.OllamaEmbeddings") as mock_emb, patch(
+        "retrieval.retriever.Chroma"
+    ) as mock_chroma:
+        retriever = Retriever(
+            embedding_model="my-model", persist_directory="/tmp/x", collection_name="my_coll"
+        )
+        retriever.retrieve("q", k=3)
 
-        # Verify the underlying Chroma instance received the calls correctly
-        mock_chroma_instance.add_documents.assert_called_once_with(documents=docs, ids=ids)
+        mock_emb.assert_called_once_with(model="my-model")
+        mock_chroma.assert_called_once_with(
+            collection_name="my_coll",
+            persist_directory="/tmp/x",
+            embedding_function=mock_emb.return_value,
+        )
+        # created once, then reused
+        retriever.retrieve("q2", k=3)
+        mock_chroma.assert_called_once()
 
-    @patch('src.retrieval.retriever.Chroma')
-    def test_retrieve(self, MockChroma):
-        """Test retrieving documents from the mocked vector store."""
-        mock_chroma_instance = MockChroma.return_value
-        retriever = Retriever()
 
-        mock_docs = [
-            Document(page_content="Result 1"),
-            Document(page_content="Result 2")
-        ]
+def test_retrieve():
+    store = MagicMock()
+    store.as_retriever.return_value.invoke.return_value = [
+        Document(page_content="Result 1"),
+        Document(page_content="Result 2"),
+    ]
+    results = Retriever(vector_store=store).retrieve("test query", k=2)
 
-        mock_chroma_instance.as_retriever.return_value.invoke.return_value = mock_docs
+    assert [d.page_content for d in results] == ["Result 1", "Result 2"]
+    store.as_retriever.assert_called_once_with(search_kwargs={"k": 2})
 
-        results = retriever.retrieve("test query", k=2)
 
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results[0].page_content, "Result 1")
-        mock_chroma_instance.as_retriever.assert_called_once_with(search_kwargs={"k": 2})
+def test_add_documents_passes_ids():
+    store = MagicMock()
+    docs = [Document(page_content="chunk 1")]
+    Retriever(vector_store=store).add_documents(docs, ["id_1"])
+    store.add_documents.assert_called_once_with(documents=docs, ids=["id_1"])
 
-    @patch('src.retrieval.retriever.Chroma')
-    def test_is_empty_when_not_empty(self, MockChroma):
-        """Test that is_empty returns False when documents exist."""
-        mock_chroma_instance = MockChroma.return_value
-        # Mock the private method to return count > 0
-        mock_chroma_instance._collection.count.return_value = 1
-        retriever = Retriever()
 
-        self.assertFalse(retriever.is_empty())
+def test_add_documents_batches_large_inputs():
+    store = MagicMock()
+    docs = [Document(page_content=str(i)) for i in range(1201)]
+    ids = [str(i) for i in range(1201)]
+    Retriever(vector_store=store).add_documents(docs, ids)
 
-    @patch('src.retrieval.retriever.Chroma')
-    def test_is_empty_when_empty(self, MockChroma):
-        """Test that is_empty returns True when no documents exist."""
-        mock_chroma_instance = MockChroma.return_value
-        # Mock the private method to return count == 0
-        mock_chroma_instance._collection.count.return_value = 0
-        retriever = Retriever()
+    assert store.add_documents.call_count == 3
+    sent = [d for call in store.add_documents.call_args_list for d in call.kwargs["documents"]]
+    assert sent == docs
 
-        self.assertTrue(retriever.is_empty())
 
-if __name__ == '__main__':
-    unittest.main()
+def test_add_documents_rejects_mismatched_ids():
+    with pytest.raises(ValueError):
+        Retriever(vector_store=MagicMock()).add_documents([Document(page_content="a")], ["1", "2"])
+
+
+@pytest.mark.parametrize("ids, expected", [([], True), (["a"], False)])
+def test_is_empty(ids, expected):
+    store = MagicMock()
+    store.get.return_value = {"ids": ids}
+    assert Retriever(vector_store=store).is_empty() is expected

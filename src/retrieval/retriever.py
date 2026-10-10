@@ -1,19 +1,27 @@
-from config.settings import Settings
+from __future__ import annotations
+
 from typing import List, Optional
-from langchain_core.documents import Document
-from langchain_core.vectorstores import VectorStoreRetriever
-from langchain_ollama import OllamaEmbeddings
+
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain_ollama import OllamaEmbeddings
+
+from config.settings import Settings
+
+# Chroma rejects very large single inserts, so documents are added in batches.
+_ADD_BATCH_SIZE = 500
+
 
 class Retriever:
     """
     Handles retrieval of relevant documents from a vector store.
 
-    The retriever is responsible for interacting with the persistent vector database,
-    handling both document indexing (adding) and query retrieval.
+    The retriever is responsible for interacting with the persistent vector
+    database, handling both document indexing (adding) and query retrieval.
 
-    Design Note: Initialization of the embedding function and vector store
-    is lazy when `vector_store` is not pre-injected, ensuring fast startup time.
+    Design Note: The embedding function and vector store are created lazily on
+    first use when no ``vector_store`` is injected, which keeps startup fast.
+    Any argument that is not given falls back to the ``Settings`` defaults.
     """
 
     def __init__(
@@ -24,15 +32,9 @@ class Retriever:
         collection_name: Optional[str] = None,
     ):
         """
-        Initialize the retriever.
-
-        If `vector_store` is provided, it uses the existing instance.
-        If `vector_store` is None, the retriever initializes the Chroma
-        vector store lazily using settings, which requires network/disk I/O.
-
         Args:
-            vector_store: An existing Chroma vector store instance (for dependency injection).
-            embedding_model: The name of the embedding model to use.
+            vector_store: An existing Chroma instance (for dependency injection).
+            embedding_model: Name of the Ollama embedding model.
             persist_directory: Directory where the vector store is persisted.
             collection_name: Name of the collection in the vector store.
         """
@@ -41,23 +43,22 @@ class Retriever:
         self._persist_directory = persist_directory
         self._collection_name = collection_name
 
-    def _initialize_vector_store(self, settings: Settings) -> Chroma:
-        """Initializes the Chroma vector store and embedding function."""
-        embeddings = OllamaEmbeddings(model=settings.embedding_model)
+    def _initialize_vector_store(self) -> Chroma:
+        """Create the Chroma vector store and its embedding function."""
+        defaults = Settings()
+        embeddings = OllamaEmbeddings(
+            model=self._embedding_model or defaults.embedding_model
+        )
         return Chroma(
-            collection_name=settings.collection_name,
-            persist_directory=settings.vector_db_path,
+            collection_name=self._collection_name or defaults.collection_name,
+            persist_directory=self._persist_directory or defaults.vector_db_path,
             embedding_function=embeddings,
         )
 
-    def get_vector_store(self, settings: Settings) -> Chroma:
-        """
-        Returns the initialized Chroma vector store.
-        Initializes it lazily if it hasn't been set up.
-        """
+    def get_vector_store(self) -> Chroma:
+        """Return the vector store, creating it lazily on first use."""
         if self.vector_store is None:
-            print("INFO: Initializing Chroma vector store lazily...")
-            self.vector_store = self._initialize_vector_store(settings)
+            self.vector_store = self._initialize_vector_store()
         return self.vector_store
 
     def retrieve(self, query: str, k: int = 5) -> List[Document]:
@@ -66,46 +67,36 @@ class Retriever:
 
         Args:
             query: The query string.
-            k: Number of documents to retrieve. Defaults to pipeline settings.
+            k: Number of documents to retrieve.
 
         Returns:
-            A list of retrieved Document objects. If the vector store is not
-            initialized, it raises an exception.
+            A list of retrieved Document objects.
         """
-        settings = Settings()
-        if self.vector_store is None:
-            self.vector_store = self.get_vector_store(settings)
-
-        retriever = self.vector_store.as_retriever(search_kwargs={"k": k})
+        retriever = self.get_vector_store().as_retriever(search_kwargs={"k": k})
         return retriever.invoke(query)
 
-    def add_documents(self, documents: List[Document], ids: Optional[List[str]] = None) -> None:
+    def add_documents(
+        self, documents: List[Document], ids: Optional[List[str]] = None
+    ) -> None:
         """
         Add documents to the vector store.
 
         Args:
             documents: List of Document objects to add.
-            ids: Optional list of IDs for the documents.
+            ids: Optional list of IDs (same length as ``documents``). Documents
+                with an existing ID are updated instead of duplicated.
         """
-        settings = Settings()
-        if self.vector_store is None:
-            self.vector_store = self.get_vector_store(settings)
-        self.vector_store.add_documents(documents=documents, ids=ids)
+        if ids is not None and len(ids) != len(documents):
+            raise ValueError("ids and documents must have the same length")
+
+        store = self.get_vector_store()
+        for start in range(0, len(documents), _ADD_BATCH_SIZE):
+            end = start + _ADD_BATCH_SIZE
+            store.add_documents(
+                documents=documents[start:end],
+                ids=ids[start:end] if ids is not None else None,
+            )
 
     def is_empty(self) -> bool:
-        """
-        Check if the vector store collection is empty.
-
-        Returns:
-            True if the collection has no documents, False otherwise.
-        """
-        settings = Settings()
-        if self.vector_store is None:
-            self.vector_store = self.get_vector_store(settings)
-
-        try:
-            # Access the underlying collection to check the count
-            return self.vector_store._collection.count() == 0
-        except Exception:
-            # If there's an error (e.g., not connected), we assume it's not empty to be safe.
-            return False
+        """Return True if the collection contains no documents."""
+        return len(self.get_vector_store().get(limit=1)["ids"]) == 0

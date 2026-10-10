@@ -1,6 +1,6 @@
 import unittest
-from src.pipeline import RAGPipeline
-from src.config.settings import Settings
+from pipeline import RAGPipeline
+from config.settings import Settings
 from langchain_core.documents import Document
 
 # Placeholder for test setup
