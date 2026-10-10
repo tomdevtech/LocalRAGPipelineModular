@@ -1,5 +1,4 @@
 # ⚙️ RAG Pipeline: Engineering Handbook
-**Version 1.2.0**
 
 ## 🎯 System Purpose
 This repository implements a modular, high-performance Retrieval-Augmented Generation (RAG) pipeline. Its function is to transform raw, unstructured data into contextualized knowledge suitable for LLM consumption. The architecture is built around the **Service Orchestration Pattern**, ensuring maximum modularity, high testability, and clear separation of concerns.
