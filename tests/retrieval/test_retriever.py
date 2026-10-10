@@ -1,3 +1,4 @@
+"""Tests for Retriever: lazy initialisation, search, batching and emptiness check."""
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ from retrieval.retriever import Retriever
 
 
 def test_constructor_is_lazy():
+    """Creating a Retriever must not create a vector store yet."""
     assert Retriever().vector_store is None
 
 
@@ -32,6 +34,7 @@ def test_lazy_initialization_uses_constructor_arguments():
 
 
 def test_retrieve():
+    """retrieve() delegates to the store's retriever with the requested k."""
     store = MagicMock()
     store.as_retriever.return_value.invoke.return_value = [
         Document(page_content="Result 1"),
@@ -44,6 +47,7 @@ def test_retrieve():
 
 
 def test_add_documents_passes_ids():
+    """Documents and IDs are forwarded to the store."""
     store = MagicMock()
     docs = [Document(page_content="chunk 1")]
     Retriever(vector_store=store).add_documents(docs, ["id_1"])
@@ -51,6 +55,7 @@ def test_add_documents_passes_ids():
 
 
 def test_add_documents_batches_large_inputs():
+    """Large inputs are split into batches and nothing is lost or reordered."""
     store = MagicMock()
     docs = [Document(page_content=str(i)) for i in range(1201)]
     ids = [str(i) for i in range(1201)]
@@ -62,12 +67,14 @@ def test_add_documents_batches_large_inputs():
 
 
 def test_add_documents_rejects_mismatched_ids():
+    """Different numbers of IDs and documents raise ValueError."""
     with pytest.raises(ValueError):
         Retriever(vector_store=MagicMock()).add_documents([Document(page_content="a")], ["1", "2"])
 
 
 @pytest.mark.parametrize("ids, expected", [([], True), (["a"], False)])
 def test_is_empty(ids, expected):
+    """is_empty() reflects whether the store returns any row."""
     store = MagicMock()
     store.get.return_value = {"ids": ids}
     assert Retriever(vector_store=store).is_empty() is expected

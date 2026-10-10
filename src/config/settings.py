@@ -43,6 +43,8 @@ class Settings:
 
     def __post_init__(self) -> None:
         """Validate values, make paths absolute and create directories."""
+        # Fail early with a clear message; otherwise the splitters raise cryptic
+        # errors much later, e.g. when the first document is indexed.
         if self.chunk_size <= 0:
             raise ValueError("chunk_size must be greater than 0")
         if not 0 <= self.chunk_overlap < self.chunk_size:
@@ -52,10 +54,12 @@ class Settings:
         if self.rerank_top_k <= 0:
             raise ValueError("rerank_top_k must be greater than 0")
 
+        # Absolute paths keep the vector store location independent of the
+        # current working directory (e.g. `python src/main.py` vs. `local-rag`).
         self.data_path = os.path.abspath(self.data_path)
         self.vector_db_path = os.path.abspath(self.vector_db_path)
 
-        # Create directories if they don't exist
+        # Create directories if they don't exist (Chroma itself creates the DB folder).
         os.makedirs(self.data_path, exist_ok=True)
         os.makedirs(os.path.dirname(self.vector_db_path), exist_ok=True)
 

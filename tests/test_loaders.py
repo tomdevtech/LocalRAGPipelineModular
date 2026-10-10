@@ -1,9 +1,11 @@
+"""Tests for the CSV review loader."""
 import pytest
 
 from loaders import load_reviews_csv
 
 
 def test_load_reviews_csv(tmp_path):
+    """Rows become Documents; empty rows are skipped and metadata uses plain Python types."""
     csv = tmp_path / "r.csv"
     csv.write_text(
         "Title,Date,Rating,Review\n"
@@ -21,11 +23,13 @@ def test_load_reviews_csv(tmp_path):
 
 
 def test_missing_file(tmp_path):
+    """A missing file raises FileNotFoundError."""
     with pytest.raises(FileNotFoundError):
         load_reviews_csv(str(tmp_path / "nope.csv"))
 
 
 def test_missing_columns(tmp_path):
+    """A CSV without the required columns raises a descriptive ValueError."""
     csv = tmp_path / "bad.csv"
     csv.write_text("Title,Text\na,b\n")
     with pytest.raises(ValueError, match="Date, Rating, Review"):

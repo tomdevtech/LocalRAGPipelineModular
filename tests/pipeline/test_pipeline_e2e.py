@@ -16,6 +16,7 @@ REVIEWS_CSV = os.path.join(os.path.dirname(__file__), "..", "..", "data", "reali
 
 @pytest.fixture
 def pipeline(tmp_path, fake_embeddings):
+    """Pipeline backed by a real, temporary Chroma store and fake embeddings."""
     settings = Settings(data_path=str(tmp_path), vector_db_path=str(tmp_path / "db"))
     p = RAGPipeline(settings=settings)
     p.retriever = Retriever(
@@ -31,6 +32,7 @@ def pipeline(tmp_path, fake_embeddings):
 
 
 def test_index_and_retrieve(pipeline):
+    """Indexed documents can be found again by a related query."""
     assert pipeline.retriever.is_empty()
 
     pipeline.add_documents(
@@ -47,6 +49,7 @@ def test_index_and_retrieve(pipeline):
 
 
 def test_reindexing_is_idempotent_and_batches_do_not_overwrite(pipeline):
+    """Re-adding identical data creates no duplicates; new data does not overwrite old."""
     store = pipeline.retriever.vector_store
     docs = [Document(page_content=f"review number {i}", metadata={"source": "x"}) for i in range(5)]
 
@@ -59,6 +62,7 @@ def test_reindexing_is_idempotent_and_batches_do_not_overwrite(pipeline):
 
 
 def test_real_csv_loads_and_indexes(pipeline):
+    """The bundled review CSV can be loaded, indexed and queried."""
     documents = load_reviews_csv(REVIEWS_CSV)
     assert len(documents) == 123
 

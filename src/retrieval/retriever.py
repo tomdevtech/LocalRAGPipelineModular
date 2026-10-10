@@ -1,3 +1,4 @@
+"""Vector-store access: lazy Chroma setup, similarity search and batched indexing."""
 from __future__ import annotations
 
 from typing import List, Optional
@@ -45,7 +46,7 @@ class Retriever:
 
     def _initialize_vector_store(self) -> Chroma:
         """Create the Chroma vector store and its embedding function."""
-        defaults = Settings()
+        defaults = Settings()  # fallback values for everything not given explicitly
         embeddings = OllamaEmbeddings(
             model=self._embedding_model or defaults.embedding_model
         )
@@ -90,6 +91,7 @@ class Retriever:
             raise ValueError("ids and documents must have the same length")
 
         store = self.get_vector_store()
+        # Slice documents and ids in lockstep so that each stays paired with its ID.
         for start in range(0, len(documents), _ADD_BATCH_SIZE):
             end = start + _ADD_BATCH_SIZE
             store.add_documents(
@@ -99,4 +101,5 @@ class Retriever:
 
     def is_empty(self) -> bool:
         """Return True if the collection contains no documents."""
+        # Fetching a single row is a cheap, public-API way to test for emptiness.
         return len(self.get_vector_store().get(limit=1)["ids"]) == 0

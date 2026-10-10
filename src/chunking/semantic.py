@@ -1,3 +1,4 @@
+"""Semantic chunking: starts a new chunk where the topic of the text changes."""
 from __future__ import annotations
 
 from typing import Any, List, Optional
@@ -44,11 +45,14 @@ class SemanticChunker(BaseChunker):
         embedding_model: Optional[str] = None,
         similarity_threshold: float = 0.6,
     ):
+        """Create the chunker; see the class docstring for the arguments."""
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.similarity_threshold = similarity_threshold
         self._embedding_model = embedding_model or Settings.embedding_model
         self._embeddings = embeddings
+        # Only used for single sentences that are longer than chunk_size. The
+        # overlap is clamped because the splitter rejects overlap >= chunk_size.
         self._hard_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=min(chunk_overlap, max(chunk_size - 1, 0)),
@@ -56,6 +60,7 @@ class SemanticChunker(BaseChunker):
 
     @property
     def embeddings(self) -> Any:
+        """The embedding model, created lazily so that constructing is cheap."""
         if self._embeddings is None:
             self._embeddings = OllamaEmbeddings(model=self._embedding_model)
         return self._embeddings
@@ -64,12 +69,16 @@ class SemanticChunker(BaseChunker):
         """Cosine similarity between each sentence and the one before it."""
         vectors = np.asarray(self.embeddings.embed_documents(sentences), dtype=float)
         norms = np.linalg.norm(vectors, axis=1)
-        norms[norms == 0] = 1e-12
+        norms[norms == 0] = 1e-12  # avoid division by zero for all-zero vectors
         unit = vectors / norms[:, None]
+        # For unit vectors the dot product equals the cosine similarity. Row i
+        # of the result compares sentence i + 1 with sentence i.
         return np.sum(unit[1:] * unit[:-1], axis=1)
 
     def split_text(self, text: str) -> List[str]:
         """Split text into semantically coherent chunks."""
+        # Step 1: sentences; oversized ones are cut up front so that every
+        # unit handed to the grouping step fits into a chunk on its own.
         sentences: List[str] = []
         for sentence in split_sentences(text):
             if len(sentence) > self.chunk_size:
@@ -82,8 +91,10 @@ class SemanticChunker(BaseChunker):
         if len(sentences) == 1:
             return sentences
 
+        # Step 2: embed and compare neighbouring sentences.
         similarities = self._similarities(sentences)
 
+        # Step 3: greedily grow the current chunk until the topic shifts or it is full.
         chunks: List[str] = []
         current = sentences[0]
         for sentence, similarity in zip(sentences[1:], similarities):

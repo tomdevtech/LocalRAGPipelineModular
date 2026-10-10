@@ -1,9 +1,11 @@
+"""Tests for the command line interface (pipeline and LLM are mocked)."""
 from unittest.mock import MagicMock, patch
 
 import main
 
 
 def test_cli_single_question(tmp_path):
+    """--data indexes the CSV, then -q answers via retrieved context."""
     csv = tmp_path / "r.csv"
     csv.write_text("Title,Date,Rating,Review\nGood,2024-01-01,5,Tasty pizza\n")
 
@@ -28,6 +30,7 @@ def test_cli_single_question(tmp_path):
 
 
 def test_cli_reports_missing_data_file(capsys):
+    """A non-existent --data file gives exit code 1 and an error message."""
     with patch("main.Settings"), patch("main.RAGPipeline"):
         code = main.main(["--data", "/does/not/exist.csv", "-q", "hi"])
     assert code == 1

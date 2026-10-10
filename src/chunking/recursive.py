@@ -1,3 +1,4 @@
+"""Recursive chunking: prefers natural boundaries (paragraph, line, word)."""
 from __future__ import annotations
 
 from .base import BaseChunker
@@ -13,6 +14,14 @@ class RecursiveChunker(BaseChunker):
         chunk_overlap: int = 200,
         separators: List[str] | None = None,
     ):
+        """
+        Args:
+            chunk_size: Maximum number of characters per chunk.
+            chunk_overlap: Number of characters shared by consecutive chunks.
+            separators: Split points in order of preference. The splitter tries
+                the first one and only falls back to the next if a piece is
+                still too large. Defaults to paragraph, line, word, character.
+        """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.separators = separators or ["\n\n", "\n", " ", ""]

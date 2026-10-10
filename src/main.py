@@ -26,6 +26,7 @@ And here is the question to answer: {question}
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Create the command line argument parser for ``local-rag``."""
     parser = argparse.ArgumentParser(
         prog="local-rag",
         description="Index restaurant reviews and ask questions about them (local RAG).",
@@ -38,23 +39,47 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def index_csv(pipeline: RAGPipeline, path: str) -> None:
+    """Load a reviews CSV, add it to the pipeline and print a short summary."""
     documents = load_reviews_csv(path)
     count = pipeline.add_documents(documents)
     print(f"Indexed {len(documents)} reviews ({count} chunks) from {path}.")
 
 
 def answer(pipeline: RAGPipeline, chain, question: str, k: Optional[int]) -> str:
+    """
+    Answer one question: retrieve context, then let the LLM chain respond.
+
+    Args:
+        pipeline: The RAG pipeline used to fetch context.
+        chain: A LangChain runnable taking ``reviews`` and ``question``.
+        question: The user's question.
+        k: Optional number of context documents.
+
+    Returns:
+        The generated answer.
+    """
     context = pipeline.get_context(question, k=k)
     return chain.invoke({"reviews": context, "question": question})
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """
+    Run the command line interface.
+
+    Args:
+        argv: Arguments to parse; ``None`` means ``sys.argv[1:]``.
+
+    Returns:
+        The process exit code (0 on success, 1 on error).
+    """
     args = build_parser().parse_args(argv)
 
     try:
         settings = Settings.from_yaml(args.config) if args.config else Settings()
         pipeline = RAGPipeline(settings=settings)
 
+        # Explicit --data wins; otherwise bootstrap an empty store from the
+        # bundled data set so that a first run works out of the box.
         if args.data:
             index_csv(pipeline, args.data)
         elif pipeline.retriever.is_empty():
@@ -68,6 +93,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
+    # User errors (bad path, bad CSV) get a short message instead of a traceback.
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -75,6 +101,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Error: {exc}{OLLAMA_HINT}", file=sys.stderr)
         return 1
 
+    # LCEL: the prompt is piped into the model; created after setup so that
+    # indexing problems are reported before the LLM client is touched.
     chain = ChatPromptTemplate.from_template(PROMPT_TEMPLATE) | OllamaLLM(model=settings.llm_model)
 
     if args.question:
@@ -85,6 +113,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         return 0
 
+    # Interactive mode. Errors in one question must not end the session.
     while True:
         try:
             question = input("\nAsk your question (or type 'q' to quit): ").strip()

@@ -1,3 +1,4 @@
+"""Propositional chunking: one chunk per self-contained statement."""
 from __future__ import annotations
 
 from typing import Callable, List, Optional
@@ -27,9 +28,18 @@ class PropositionalChunker(BaseChunker):
         chunk_overlap: int = 200,
         extractor: Optional[Callable[[str], List[str]]] = None,
     ):
+        """
+        Args:
+            chunk_size: Maximum number of characters per chunk.
+            chunk_overlap: Overlap, only used when a statement must be hard-split.
+            extractor: Optional callable ``text -> list[str]`` returning atomic
+                statements. Without it, sentences are used.
+        """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.extractor = extractor
+        # Safety net for statements longer than chunk_size; the overlap is
+        # clamped because the splitter rejects overlap >= chunk_size.
         self._hard_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=min(chunk_overlap, max(chunk_size - 1, 0)),
@@ -37,6 +47,8 @@ class PropositionalChunker(BaseChunker):
 
     def _extract_propositions(self, text: str) -> List[str]:
         """Return the propositions of ``text``. Override or inject ``extractor``."""
+        # An injected extractor (e.g. an LLM) wins over the sentence heuristic.
+        # Blank results are dropped so that no empty chunk reaches the vector store.
         if self.extractor is not None:
             return [p.strip() for p in self.extractor(text) if p and p.strip()]
         return split_sentences(text)

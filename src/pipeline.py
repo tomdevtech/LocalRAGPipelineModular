@@ -46,18 +46,21 @@ class RAGPipeline:
         """
         self.settings = settings or Settings()
 
+        # Strategy pattern: the concrete chunker is chosen by name from the settings.
         self.chunker: BaseChunker = get_chunker(
             self.settings.chunking_strategy,
             chunk_size=self.settings.chunk_size,
             chunk_overlap=self.settings.chunk_overlap,
         )
 
+        # Lazy: no connection to Chroma/Ollama is made until the first use.
         self.retriever = Retriever(
             embedding_model=self.settings.embedding_model,
             persist_directory=self.settings.vector_db_path,
             collection_name=self.settings.collection_name,
         )
 
+        # None means "reranking disabled"; retrieve() checks this attribute.
         self.reranker: BaseReranker | None = None
         if self.settings.use_reranking:
             self.reranker = get_reranker(
@@ -77,6 +80,8 @@ class RAGPipeline:
         """
         chunked_documents: List[Document] = []
         ids: List[str] = []
+        # Every chunk inherits its parent's metadata and additionally records
+        # where it came from (parent_id) and its position in the parent (chunk_id).
         for i, doc in enumerate(documents):
             for j, chunk in enumerate(self.chunker.split_text(doc.page_content)):
                 chunked_documents.append(
@@ -87,6 +92,7 @@ class RAGPipeline:
                 )
                 ids.append(_chunk_id(doc, i, j, chunk))
 
+        # Skip the call for empty input: Chroma raises on an empty batch.
         if chunked_documents:
             self.retriever.add_documents(chunked_documents, ids)
         return len(chunked_documents)
@@ -116,6 +122,7 @@ class RAGPipeline:
         pool_size = 2 * k if use_reranker else k
         initial_docs = self.retriever.retrieve(query, k=pool_size)
 
+        # Nothing to rerank if the vector search came back empty.
         if use_reranker and initial_docs:
             return self.reranker.rerank(query, initial_docs, top_k=k)
         return initial_docs[:k]

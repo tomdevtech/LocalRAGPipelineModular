@@ -12,18 +12,22 @@ class FakeEmbeddings(Embeddings):
     DIM = 64
 
     def _vector(self, text: str) -> list:
+        """Hash every word into one of DIM buckets and count occurrences."""
         vec = [0.0] * self.DIM
         for word in re.findall(r"\w+", text.lower()):
             vec[zlib.crc32(word.encode("utf-8")) % self.DIM] += 1.0
         return vec
 
     def embed_documents(self, texts):
+        """Embed several texts."""
         return [self._vector(t) for t in texts]
 
     def embed_query(self, text):
+        """Embed a single query text the same way as documents."""
         return self._vector(text)
 
 
 @pytest.fixture
 def fake_embeddings():
+    """Provide a fresh FakeEmbeddings instance."""
     return FakeEmbeddings()

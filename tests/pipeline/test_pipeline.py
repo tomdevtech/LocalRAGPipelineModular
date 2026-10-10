@@ -1,3 +1,4 @@
+"""Unit tests for RAGPipeline orchestration, with all services mocked."""
 from unittest.mock import Mock
 
 import pytest
@@ -11,6 +12,7 @@ from retrieval.retriever import Retriever
 
 
 def make_pipeline(tmp_path, **overrides):
+    """Build a real pipeline whose paths point into ``tmp_path``."""
     settings = Settings(
         data_path=str(tmp_path), vector_db_path=str(tmp_path / "db"), **overrides
     )
@@ -28,6 +30,7 @@ def pipeline(tmp_path):
 
 
 def test_initialization_creates_all_components(tmp_path):
+    """All components are created, and reranking can be switched off."""
     p = make_pipeline(tmp_path)
     assert isinstance(p.chunker, BaseChunker)
     assert isinstance(p.retriever, Retriever)
@@ -36,6 +39,7 @@ def test_initialization_creates_all_components(tmp_path):
 
 
 def test_retriever_and_reranker_receive_configured_models(tmp_path):
+    """The configured models and collection reach the retriever and reranker."""
     p = make_pipeline(tmp_path, embedding_model="other-model", collection_name="coll")
     assert p.reranker.embedding_model == "other-model"
     assert p.retriever._embedding_model == "other-model"
@@ -43,6 +47,7 @@ def test_retriever_and_reranker_receive_configured_models(tmp_path):
 
 
 def test_add_documents_flow(pipeline):
+    """Documents are chunked and passed on with metadata and unique IDs."""
     pipeline.chunker.split_text.return_value = ["chunk A", "chunk B"]
     doc = Document(page_content="long content one", metadata={"source": "doc1"})
 
@@ -59,6 +64,7 @@ def test_add_documents_flow(pipeline):
 
 
 def test_chunk_ids_are_stable_and_content_based(pipeline):
+    """Same input gives the same IDs (idempotent); different content gives different IDs."""
     pipeline.chunker.split_text.return_value = ["chunk A"]
     doc = Document(page_content="x", metadata={"source": "s"})
 
@@ -74,12 +80,14 @@ def test_chunk_ids_are_stable_and_content_based(pipeline):
 
 
 def test_add_documents_with_no_chunks_does_not_touch_store(pipeline):
+    """Empty chunker output must not trigger a call to the vector store."""
     pipeline.chunker.split_text.return_value = []
     assert pipeline.add_documents([Document(page_content="")]) == 0
     pipeline.retriever.add_documents.assert_not_called()
 
 
 def test_retrieve_without_reranker(pipeline):
+    """Without reranking exactly k documents are requested and returned."""
     pipeline.reranker = None
     pipeline.retriever.retrieve.return_value = [Document(page_content=f"R{i}") for i in range(1, 3)]
 
@@ -90,6 +98,7 @@ def test_retrieve_without_reranker(pipeline):
 
 
 def test_retrieve_with_reranker_fetches_wider_pool(pipeline):
+    """With reranking, 2*k candidates are fetched and the reranked top-k is returned."""
     pool = [Document(page_content=f"R{i}") for i in range(1, 5)]
     reranked = [Document(page_content="Top 1"), Document(page_content="Top 2")]
     pipeline.retriever.retrieve.return_value = pool
@@ -103,6 +112,7 @@ def test_retrieve_with_reranker_fetches_wider_pool(pipeline):
 
 
 def test_retrieve_default_k_comes_from_settings(pipeline):
+    """Without an explicit k, the settings decide (rerank_top_k or k)."""
     pipeline.retriever.retrieve.return_value = []
 
     pipeline.retrieve("q")  # reranker on -> rerank_top_k (3) -> pool 6
@@ -114,17 +124,20 @@ def test_retrieve_default_k_comes_from_settings(pipeline):
 
 
 def test_retrieve_with_empty_pool_skips_reranker(pipeline):
+    """An empty search result is returned as is, without calling the reranker."""
     pipeline.retriever.retrieve.return_value = []
     assert pipeline.retrieve("q", k=2) == []
     pipeline.reranker.rerank.assert_not_called()
 
 
 def test_retrieve_rejects_invalid_k(pipeline):
+    """k must be positive."""
     with pytest.raises(ValueError):
         pipeline.retrieve("q", k=0)
 
 
 def test_get_context_joins_documents(pipeline):
+    """The context is the page contents joined by blank lines."""
     pipeline.reranker = None
     pipeline.retriever.retrieve.return_value = [
         Document(page_content="Context snippet 1"),
